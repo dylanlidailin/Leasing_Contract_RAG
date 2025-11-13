@@ -51,19 +51,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# Note: In a React setup, you'll serve the React app's 'build' folder.
-# This static mount is for the *old* index.html, which we're replacing.
-# You can remove it or keep it for testing.
-app.mount("/static", StaticFiles(directory="static", html=True), name="static")
-
-@app.get("/", response_class=HTMLResponse)
-async def serve_ui():
-    # This now just serves as a placeholder or can serve the old HTML.
-    # The React app will be served separately (usually).
-    html_file = Path(__file__).parent / "static" / "index.html"
-    if html_file.exists():
-        return HTMLResponse(html_file.read_text())
-    return HTMLResponse("<h1>React App Not Found</h1><p>Please run the React dev server.</p>")
 
 # ---- Chain Builders ----
 
@@ -153,7 +140,7 @@ class SessionQuery(BaseModel):
 @app.post("/upload_pdf")
 async def upload_pdf(file: UploadFile = File(...)):
     """
-    This endpoint now sets up the session for BOTH chat and extraction.
+    This endpoint sets up the session for both the chatbot feature and the full-document extraction.
     It builds the RAG chain and stores the docs.
     """
     try:
