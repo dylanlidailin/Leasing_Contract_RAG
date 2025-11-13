@@ -1,6 +1,6 @@
 import os
 import uuid
-import json  # Import for parsing JSON
+import asyncio  # Added for parallel queries
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from dotenv import load_dotenv
@@ -63,70 +63,55 @@ def build_rag_chain(docs: list):
     retriever = vectorstore.as_retriever()
 
     prompt = ChatPromptTemplate.from_template(
-        "Use the following context to answer the question:\n\n{context}\n\nQuestion: {input}"
+        "Use the following context to answer the question:\n\n{context}\n\nQuestion: {input}\n\nAnswer:"
     )
 
     combine_docs_chain = create_stuff_documents_chain(llm, prompt)
     rag_chain = create_retrieval_chain(retriever, combine_docs_chain)
     return rag_chain
 
-def get_extraction_chain():
-    """Builds the JSON extraction chain."""
-    extraction_prompt_template = """
-You are an expert legal assistant specializing in parsing lease agreements.
-Use the following context from a lease agreement to extract the requested information.
-Your output MUST be a single, valid JSON object. Do not add any text before or after the JSON.
-Use "null" for any fields you cannot find in the context.
-
-Context:
-{context}
-
-Based on the context, extract the following information. Use the keys provided.
-
-{{
-  "basics": {{
-    "property_address": "...",
-    "landlord_name": "...",
-    "tenant_names": ["..."],
-    "lease_start_date": "YYYY-MM-DD",
-    "lease_end_date": "YYYY-MM-DD",
-    "occupancy_limit": 0
-  }},
-  "rent_and_payments": {{
-    "monthly_rent_amount": 0.0,
-    "rent_due_day": "...",
-    "grace_period_days": 0,
-    "late_fee_policy": "...",
-    "accepted_payment_methods": ["..."]
-  }},
-  "deposits_and_fees": {{
-    "security_deposit_amount": 0.0,
-    "refundability_rules": "...",
-    "non_refundable_fees": ["..."],
-    "move_out_notice_period_days": 0
-  }},
-  "utilities": {{
-    "utilities_included": ["..."],
-    "utilities_tenant_responsible_for": ["..."]
-  }},
-  "rules": {{
-    "smoking_policy": "...",
-    "pet_policy": "...",
-    "subletting_policy": "...",
-    "parking_policy": "..."
-  }},
-  "maintenance_and_termination": {{
-    "landlord_maintenance_responsibilities": "...",
-    "entry_notice_period_hours": 0,
-    "early_termination_terms": "...",
-    "renewal_holdover_policy": "...",
-    "insurance_requirement": "..."
-  }}
-}}
-"""
-    prompt = ChatPromptTemplate.from_template(extraction_prompt_template)
-    extraction_chain = create_stuff_documents_chain(llm, prompt)
-    return extraction_chain
+# ---- Extraction Questions ----
+# Defined all questions needed to fill the JSON
+EXTRACTION_QUESTIONS = {
+  "basics": {
+    "property_address": "What is the full property address for the lease?",
+    "landlord_name": "What is the name of the Landlord or Lessor?",
+    "tenant_names": "What are the names of all Tenants or Lessees listed? Respond with a comma-separated list.",
+    "lease_start_date": "What is the lease start date? (YYYY-MM-DD)",
+    "lease_end_date": "What is the lease end date? (YYYY-MM-DD)",
+    "occupancy_limit": "What is the occupancy limit (number of people)?"
+  },
+  "rent_and_payments": {
+    "monthly_rent_amount": "What is the monthly rent amount in dollars? (e.g., 1500.00)",
+    "rent_due_day": "What day of the month is rent due?",
+    "grace_period_days": "How many days is the grace period for late rent?",
+    "late_fee_policy": "What is the late fee policy?",
+    "accepted_payment_methods": "What are the accepted payment methods for rent? (e.g., check, online portal)"
+  },
+  "deposits_and_fees": {
+    "security_deposit_amount": "What is the security deposit amount?",
+    "refundability_rules": "What are the rules for refunding the security deposit?",
+    "non_refundable_fees": "What are the non-refundable fees? (e.g., cleaning fee)",
+    "move_out_notice_period_days": "What is the move-out notice period in days?"
+  },
+  "utilities": {
+    "utilities_included": "What utilities are included in the rent? (e.g., water, trash)",
+    "utilities_tenant_responsible_for": "What utilities is the tenant responsible for? (e.g., electricity, gas)"
+  },
+  "rules": {
+    "smoking_policy": "What is the smoking policy?",
+    "pet_policy": "What is the pet policy? (e.g., allowed with fee, not allowed)",
+    "subletting_policy": "What is the subletting policy?",
+    "parking_policy": "What is the parking policy?"
+  },
+  "maintenance_and_termination": {
+    "landlord_maintenance_responsibilities": "What are the landlord's maintenance responsibilities?",
+    "entry_notice_period_hours": "What is the notice period in hours for landlord entry?",
+    "early_termination_terms": "What are the terms for early termination of the lease?",
+    "renewal_holdover_policy": "What is the policy for renewal or holdover?",
+    "insurance_requirement": "Is renter's insurance required?"
+  }
+}
 
 # ---- API Models ----
 class Query(BaseModel):
@@ -140,8 +125,8 @@ class SessionQuery(BaseModel):
 @app.post("/upload_pdf")
 async def upload_pdf(file: UploadFile = File(...)):
     """
-    This endpoint sets up the session for both the chatbot feature and the full-document extraction.
-    It builds the RAG chain and stores the docs.
+    This endpoint sets up the session for the chatbot and extraction features.
+    It builds the RAG chain and stores it in the session.
     """
     try:
         suffix = Path(file.filename).suffix or ".pdf"
@@ -160,11 +145,11 @@ async def upload_pdf(file: UploadFile = File(...)):
         if rag_chain is None:
             raise HTTPException(status_code=400, detail="Failed to build retrieval chain")
 
-        # 2. Store chain AND docs in session
+        # 2. Store chain in session (REMOVED raw docs to save memory)
         session_id = str(uuid.uuid4())
         SESSION_STORE[session_id] = {
             "rag_chain": rag_chain,
-            "docs": docs
+            # "docs": docs  <- Removed
         }
 
         # 3. Return session ID
@@ -201,42 +186,72 @@ async def ask(q: Query):
 
     return {"answer": answer}
 
+# --- Helper for new get_summary ---
+async def run_query(chain, question):
+    """Runs a single RAG query and returns the answer."""
+    try:
+        response = await chain.ainvoke({"input": question})
+        answer = response.get("answer")
+        # Simple cleanup for "null" or "N/A" type responses
+        if answer is None or "not found" in answer.lower() or "n/a" in answer.lower():
+            return "null"
+        return answer
+    except Exception as e:
+        print(f"Error during query '{question}': {e}")
+        return "null"
+
+
 @app.post("/get_summary")
 async def get_summary(q: SessionQuery):
-    """Handles JSON summary extraction."""
+    """Handles JSON summary extraction using parallel RAG queries."""
     session_data = SESSION_STORE.get(q.session_id)
     if not session_data:
         raise HTTPException(status_code=404, detail="Session not found.")
     
-    docs = session_data.get("docs")
-    if not docs:
-        raise HTTPException(status_code=400, detail="Documents not found in session.")
+    chain = session_data.get("rag_chain")
+    if not chain:
+        raise HTTPException(status_code=400, detail="RAG chain not found in session.")
 
     try:
-        extraction_chain = get_extraction_chain()
-        response_str = await extraction_chain.ainvoke({
-            "context": docs,
-            "input": "Extract all data." 
-        })
+        # 1. Create a list of all async tasks to run
+        tasks = []
+        # This dict will help us map results back later
+        query_to_key_map = {} 
+
+        for category, fields in EXTRACTION_QUESTIONS.items():
+            if category not in fields: # Create nested dict for results
+                fields[category] = {}
+            for key, question in fields.items():
+                tasks.append(run_query(chain, question))
+                # Store a "path" to the key for easy re-assembly
+                query_to_key_map[question] = (category, key) 
+
+        # 2. Run all tasks in parallel
+        print(f"Running {len(tasks)} extraction queries in parallel for session {q.session_id}...")
+        results = await asyncio.gather(*tasks)
+        print("...Queries complete.")
+
+        # 3. Assemble the final JSON
+        extracted_data = {}
+        all_questions = list(query_to_key_map.keys())
         
-        # Clean up potential markdown code fences from LLM response
-        if response_str.strip().startswith("```json"):
-            response_str = response_str.strip()[7:-3].strip()
-        
-        extracted_data = json.loads(response_str)
-        
+        for i in range(len(results)):
+            question = all_questions[i]
+            answer = results[i]
+            category, key = query_to_key_map[question]
+            
+            if category not in extracted_data:
+                extracted_data[category] = {}
+            
+            # Here you could add logic to parse types (e.g., float for rent)
+            # For now, we'll just assign the string answer.
+            extracted_data[category][key] = answer
+
         return {
             "status": "Extracted",
             "data": extracted_data
         }
         
-    except json.JSONDecodeError:
-        print("[LLM Response Error] Output was not valid JSON:")
-        print(response_str)
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Failed to parse LLM response as JSON. Raw: {response_str}"
-        )
     except Exception as e:
         print(f"[Extraction Error] {e}")
         raise HTTPException(status_code=500, detail=str(e))
