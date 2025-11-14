@@ -1,7 +1,7 @@
 import os
 import uuid
 import asyncio
-import json  # Added for pretty-printing JSON
+import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from dotenv import load_dotenv
@@ -44,18 +44,24 @@ def build_rag_chain(docs: list):
     vectorstore = FAISS.from_documents(pages, embeddings)
     retriever = vectorstore.as_retriever()
 
-    system_prompt = (
-        "You are an expert assistant for analyzing documents. "
-        "Use the following context to answer the question clearly and directly. "
-        "Your priority is to find specific, filled-in information.\n\n"
-        "IMPORTANT: If the context contains both a real value (like a specific address, name, or dollar amount) "
-        "AND a blank placeholder (like '("Property")' or 'N/A' or 'None'), "
-        "ALWAYS prioritize the real, specific value and IGNORE the placeholder. "
-        "Answer only with the real value.\n\n"
-        "Context:\n{context}\n\n"
-        "Question: {input}\n\n"
-        "Answer:"
-    )
+    # This is the improved prompt to handle placeholders
+    system_prompt = """
+    You are an expert assistant for analyzing documents. 
+    Use the following context to answer the question clearly and directly. 
+    Your priority is to find specific, filled-in information.
+
+    IMPORTANT: If the context contains both a real value (like a specific address, name, or dollar amount)
+    AND a blank placeholder (like '(Property)' or 'N/A' or 'None'),
+    ALWAYS prioritize the real, specific value and IGNORE the placeholder.
+    Answer only with the real value.
+
+    Context:
+    {context}
+
+    Question: {input}
+
+    Answer:
+    """
 
     prompt = ChatPromptTemplate.from_template(system_prompt)
 
@@ -65,8 +71,6 @@ def build_rag_chain(docs: list):
     return rag_chain
 
 # ---- Extraction Questions ----
-# [This section is unchanged, so it is omitted for brevity]
-# [You should copy/paste your full EXTRACTION_QUESTIONS dict here]
 EXTRACTION_QUESTIONS = {
   "basics": {
     "property_address": "What is the full property address for the lease?",
@@ -122,37 +126,52 @@ async def run_query(chain, question):
         print(f"Error during query '{question}': {e}")
         return "null"
 
-# ---- NEW: CLI-Specific Functions ----
+# ---- CLI-Specific Functions ----
 
 async def get_summary_from_chain(chain):
     """
-    This function replaces the /get_summary endpoint.
-    It runs all extraction queries in parallel and prints the result.
+    This function runs all extraction queries in parallel
+    and prints the final assembled JSON.
     """
     print("\n[+] Generating full document summary...")
+    print("    This may take up to a minute. Please wait.")
     tasks = []
     query_to_key_map = {} 
 
+    # 1. Create all the async tasks
     for category, fields in EXTRACTION_QUESTIONS.items():
-        # if category not in fields: fields[category] = {}  <-- DELETE THIS LINE
-        
         for key, question in fields.items():
             tasks.append(run_query(chain, question))
             # Store a "path" to the key for easy re-assembly
             query_to_key_map[question] = (category, key) 
 
-    # Run all tasks in parallel
-    print(f"Running {len(tasks)} extraction queries in parallel...") # Added for feedback
+    # 2. Run all tasks in parallel
+    print(f"    Running {len(tasks)} extraction queries in parallel...")
     results = await asyncio.gather(*tasks)
     print("[+] Queries complete. Assembling JSON...")
     
-    # Pretty-print the JSON to the console
-    print(json.dumps(results, indent=2))
+    # 3. Assemble the final JSON
+    extracted_data = {}
+    all_questions = list(query_to_key_map.keys())
+    
+    for i in range(len(results)):
+        question = all_questions[i]
+        answer = results[i]
+        category, key = query_to_key_map[question]
+        
+        if category not in extracted_data:
+            extracted_data[category] = {}
+        
+        extracted_data[category][key] = answer
+
+    # 4. Print the final, assembled JSON
+    print("\n[+] Summary Complete!\n")
+    print(json.dumps(extracted_data, indent=2))
+
 
 async def run_chatbot_loop(chain):
     """
-    This function replaces the /ask endpoint.
-    It runs a continuous loop to ask for user questions.
+    This function runs a continuous loop to ask for user questions.
     """
     print("\n[+] Entering Chatbot Mode.")
     print("    Ask a question. Type 'quit' or 'exit' to stop.\n")
@@ -186,7 +205,7 @@ async def main():
     print("  Lease Agreement Analyzer CLI")
     print("========================================\n")
     
-    # 1. Get PDF path (replaces /upload_pdf)
+    # 1. Get PDF path
     pdf_path_str = ""
     while True:
         pdf_path_str = input("Please enter the path to your PDF lease agreement: ").strip()
@@ -195,7 +214,7 @@ async def main():
             break
         print("[!] Invalid path. Please provide a valid path to a .pdf file.\n")
     
-    # 2. Load and build the chain (logic from /upload_pdf)
+    # 2. Load and build the chain
     rag_chain = None
     try:
         print(f"\n[+] Loading and processing '{pdf_path.name}'...")
@@ -215,7 +234,7 @@ async def main():
         print("\n----------------------------------------")
         print("What would you like to do?")
         print("  [1] Ask questions (Chatbot Mode)")
-        print("  [2] Get full document summary")
+        print("  [2] Get full document summary (JSON)")
         print("  [3] Quit")
         choice = input("Choose an option (1, 2, or 3): ").strip()
         
