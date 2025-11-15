@@ -41,6 +41,11 @@ def build_rag_chain(docs: list):
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     pages = splitter.split_documents(docs)
     
+    # Store a json file of the splitted chunks for debugging
+    with open("debug_splitted_chunks.json", "w") as f:
+        json.dump([page.page_content for page in pages], f, indent=2)
+    print(f"[+] Document split into {len(pages)} chunks.")
+
     vectorstore = FAISS.from_documents(pages, embeddings)
     retriever = vectorstore.as_retriever()
 
@@ -164,6 +169,12 @@ async def get_summary_from_chain(chain):
         
         extracted_data[category][key] = answer
 
+    # Store the answer as a json file to the repo
+    output_filename = f"lease_summary_{uuid.uuid4().hex[:8]}.json"
+    with open(output_filename, "w") as f:
+        json.dump(extracted_data, f, indent=2)
+    print(f"[+] Summary saved to '{output_filename}'.")
+
     # 4. Print the final, assembled JSON
     print("\n[+] Summary Complete!\n")
     print(json.dumps(extracted_data, indent=2))
@@ -191,7 +202,7 @@ async def run_chatbot_loop(chain):
             
             print(f"\nBot: {answer}\n")
 
-        except (EOFError, KeyboardInterrupt): # Handle Ctrl+D or Ctrl+C
+        except (EOFError, KeyboardInterrupt):
             break
             
     print("\n[+] Exiting Chatbot Mode.")
@@ -252,7 +263,6 @@ async def main():
 # ---- Run CLI ----
 if __name__ == "__main__":
     try:
-        # We use asyncio.run() to start our async main function
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n[!] Application interrupted. Exiting.")
