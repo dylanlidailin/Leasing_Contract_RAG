@@ -50,15 +50,37 @@ def build_rag_chain(docs: list):
     retriever = vectorstore.as_retriever()
 
     # This is the improved prompt to handle placeholders
+    # We are making RULE 2 much more specific to handle the
+    # 'Buyer/Tenant' and 'Seller/Landlord' labels.
     system_prompt = """
     You are an expert assistant for analyzing documents. 
     Use the following context to answer the question clearly and directly. 
     Your priority is to find specific, filled-in information.
 
-    IMPORTANT: If the context contains both a real value (like a specific address, name, or dollar amount)
-    AND a blank placeholder (like '(Property)' or 'N/A' or 'None'),
-    ALWAYS prioritize the real, specific value and IGNORE the placeholder.
-    Answer only with the real value.
+    --- RULES ---
+    
+    RULE 1 (IGNORE PLACEHOLDERS): 
+    If the context contains both a real, filled-in value (like a specific address or name)
+    AND a generic placeholder (like '(Property)' or '(Tenant)'),
+    ALWAYS prioritize the real, filled-in value and IGNORE the placeholder.
+    
+    RULE 2 (PAY ATTENTION TO ROLES): 
+    Pay close attention to labels next to names.
+    - The label 'Buyer/Tenant' refers to the 'Tenant' or 'Buyer'.
+    - The label 'Seller/Landlord' refers to the 'Seller' or 'Landlord'.
+    
+    If the question asks for the 'Tenant' or 'Buyer', you MUST only provide the name(s) associated with the 'Buyer/Tenant' label.
+    If the question asks for the 'Seller' or 'Landlord', you MUST only provide the name(s) associated with the 'Seller/Landlord' label.
+    Do not mix them up or get them inverted.
+
+    RULE 3 (HOW TO ANSWER WHEN EMPTY):
+    If the requested information (like a name, date, or amount) is not found in the context or the relevant section is blank,
+    do not just say 'None' or 'N/A'.
+    Respond with a clear sentence, such as: 'That information is not specified in the document.' or 'The section for that topic appears to be blank.'
+
+    ---
+    
+    Answer only with the requested information based on these rules.
 
     Context:
     {context}
