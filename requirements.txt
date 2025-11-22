@@ -1,8 +1,25 @@
-langchain==0.3.25
-langchain-community==0.3.24
-langchain-core==0.3.60
-langchain-openai==0.3.17
-langchain-text-splitters==0.3.8
-faiss-cpu==1.11.0
-python-dotenv==1.1.0
-fastapi==0.115.12
+# Core RAG Framework
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-core>=0.3.0
+langchain-text-splitters>=0.3.0
+
+# Google Gemini (LLM & Embeddings)
+# Newer versions fix the Pydantic SecretStr error
+langchain-google-genai>=2.0.0
+google-generativeai>=0.8.0
+
+# LlamaParse (PDF Parsing)
+llama-parse>=0.5.0
+
+# Vector Store
+faiss-cpu
+
+# Utilities
+python-dotenv
+pydantic>=2.9.0
+
+# API (If you are running the FastAPI app)
+fastapi
+uvicorn
+python-multipart

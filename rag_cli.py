@@ -23,16 +23,24 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     raise RuntimeError("Please set GEMINI_API_KEY in your .env file")
 
+# Add logging for debugging purposes
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
 # Configure the Google AI SDK
 try:
     genai.configure(api_key=API_KEY)
+    logging.info("Google AI configured successfully.")
 except Exception as e:
     raise RuntimeError(f"Failed to configure Google AI: {e}. Check your GEMINI_API_KEY.")
 
 # Set the Gemini LLM for LangChain
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0, google_api_key=API_KEY)
 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=API_KEY)
-
+logging.info("LangChain LLM and Embeddings initialized.")
 
 # ---- Chain Builders ----
 def build_rag_chain(docs: list):
@@ -41,17 +49,17 @@ def build_rag_chain(docs: list):
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     pages = splitter.split_documents(docs)
     
+    logging.info(f"Document split into {len(pages)} chunks.")
+
     # Store a json file of the splitted chunks for debugging
     with open("debug_splitted_chunks.json", "w") as f:
         json.dump([page.page_content for page in pages], f, indent=2)
-    print(f"[+] Document split into {len(pages)} chunks.")
 
     vectorstore = FAISS.from_documents(pages, embeddings)
     retriever = vectorstore.as_retriever()
 
-    # This is the improved prompt to handle placeholders
-    # We are making RULE 2 much more specific to handle the
-    # 'Buyer/Tenant' and 'Seller/Landlord' labels.
+    logging.info("Vector store and retriever created.")
+
     system_prompt = """
     You are an expert assistant for analyzing documents. 
     Use the following context to answer the question clearly and directly. 
@@ -91,10 +99,11 @@ def build_rag_chain(docs: list):
     """
 
     prompt = ChatPromptTemplate.from_template(system_prompt)
+    logging.info("Prompt template created.")
 
     combine_docs_chain = create_stuff_documents_chain(llm, prompt)
     rag_chain = create_retrieval_chain(retriever, combine_docs_chain)
-    print("[+] RAG chain built successfully.")
+    logging.info("RAG chain created successfully.")
     return rag_chain
 
 # ---- Extraction Questions ----
@@ -138,6 +147,7 @@ EXTRACTION_QUESTIONS = {
     "insurance_requirement": "Is renter's insurance required?"
   }
 }
+logging.info("Extraction questions defined.")
 
 # ---- RAG Query Helper ----
 async def run_query(chain, question):
@@ -152,9 +162,9 @@ async def run_query(chain, question):
     except Exception as e:
         print(f"Error during query '{question}': {e}")
         return "null"
+logging.info("RAG query helper defined.")
 
 # ---- CLI-Specific Functions ----
-
 async def get_summary_from_chain(chain):
     """
     This function runs all extraction queries in parallel
@@ -200,7 +210,7 @@ async def get_summary_from_chain(chain):
     # 4. Print the final, assembled JSON
     print("\n[+] Summary Complete!\n")
     print(json.dumps(extracted_data, indent=2))
-
+    logging.info("Full document summary generated.")
 
 async def run_chatbot_loop(chain):
     """
