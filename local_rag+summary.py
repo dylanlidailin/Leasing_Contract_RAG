@@ -216,7 +216,8 @@ async def main():
         print("\n--------------------------------")
         print("[1] Chat with Document")
         print("[2] Generate Full Summary (JSON)")
-        print("[3] Exit")
+        print("[3] Risk Analysis (Red Flags)")  # <--- NEW OPTION
+        print("[4] Exit")                       # <--- MOVED EXIT TO 4
         choice = input("Choice: ").strip()
 
         if choice == "1":
@@ -235,6 +236,10 @@ async def main():
             await run_full_extraction(doc_vectors, chunks)
 
         elif choice == "3":
+            # <--- NEW LOGIC HERE
+            analyze_risks(doc_vectors, chunks)
+
+        elif choice == "4":
             print("Goodbye!")
             break
 
