@@ -150,6 +150,41 @@ async def run_full_extraction(doc_vectors, chunks):
     print(f"\n[+] Summary saved to: {filename}")
     print(json.dumps(results, indent=2))
 
+# 6. RISK ANALYSIS
+def analyze_risks(doc_vectors, chunks):
+    print("\n[+] Scanning for Red Flags (Indemnification, Termination, Penalties)...")
+    
+    # Search for generic "danger" terms to get relevant context
+    risk_query = "indemnification liability terminate default penalty damages"
+    q_vec = get_query_embedding(risk_query)
+    
+    # Retrieve top 10 chunks to get a broad view
+    retrieved_chunks = find_best_chunks(q_vec, doc_vectors, chunks, k=10)
+    context = "\n\n".join(retrieved_chunks)
+    
+    prompt = f"""
+    Analyze the following lease excerpts for RED FLAGS.
+    Focus on:
+    1. Unlimited Indemnification (Tenant pays for everything).
+    2. Landlord's right to terminate without cause.
+    3. Excessive late fees or penalties.
+    
+    Excerpts:
+    {context}
+    
+    Report:
+    """
+    
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    try:
+        response = model.generate_content(prompt)
+        print("\n=== 🚩 RISK ANALYSIS REPORT ===")
+        print(response.text)
+        print("===============================")
+    except Exception as e:
+        print(f"Error analyzing risks: {e}")
+
+
 # ==========================================
 # MAIN APP
 # ==========================================
