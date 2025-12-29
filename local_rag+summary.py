@@ -10,7 +10,7 @@ import time
 import numpy as np
 import google.generativeai as genai
 from dotenv import load_dotenv
-from google.api_core import exceptions # Import Google exceptions
+from google.api_core import exceptions
 
 # Unstructured Imports
 from unstructured.partition.pdf import partition_pdf
@@ -41,9 +41,20 @@ def load_and_chunk_locally(pdf_path: str):
         new_after_n_chars=800,
         combine_text_under_n_chars=500
     )
-    text_chunks = [chunk.text for chunk in chunks]
-    print(f"[+] Created {len(text_chunks)} chunks.")
-    return text_chunks
+    #text_chunks = [chunk.text for chunk in chunks]
+    #print(f"[+] Created {len(text_chunks)} chunks.")
+    records = []
+    
+    for i, chunk in enumerate(chunks):
+        records.append({
+            "chunk_id": f"chunk_{i}",
+            "text": chunk.text,
+            "page": getattr(chunk.metadata, "page_number", None),
+            "section": getattr(chunk.metadata, "section_title", None),
+            #"page": chunk.metadata.get("page_number"),
+            #"section": chunk.metadata.get("section_title"),
+        })
+    return records
 
 def get_embeddings(texts):
     result = genai.embed_content(model="models/embedding-001", content=texts, task_type="retrieval_document")
@@ -53,10 +64,18 @@ def get_query_embedding(text):
     result = genai.embed_content(model="models/embedding-001", content=text, task_type="retrieval_query")
     return np.array(result['embedding'])
 
-def find_best_chunks(query_vec, doc_vecs, chunks, k=5):
-    dot_product = np.dot(doc_vecs, query_vec)
-    top_indices = np.argsort(dot_product)[::-1][:k]
-    return [chunks[i] for i in top_indices]
+def find_best_chunks(query_vec, doc_vecs, records, k=5):
+    #dot_product = np.dot(doc_vecs, query_vec)
+    scores = np.dot(doc_vecs, query_vec)
+    top_indices = np.argsort(scores)[::-1][:k]
+    #return [chunks[i] for i in top_indices]
+    return [{
+        "text": records[i]["text"],
+        "page": records[i]["page"],
+        "section": records[i]["section"],
+        "score": float(scores[i]),
+        "chunk_id": records[i]["chunk_id"]
+    } for i in top_indices]
 
 # ROBUST GENERATION
 def generate_answer_robust(context, question, retries=3):
@@ -65,15 +84,18 @@ def generate_answer_robust(context, question, retries=3):
     prompt = f"""
     You are an expert lease analyst.
     RULES:
-    1. Use the context provided below.
-    2. If the context shows a label like "Tenant:" but no name, state that it is blank.
-    3. 'Buyer/Tenant' refers to the Tenant.
+    1. Every factual claim must be supported by a verbatim quote.
+    2. After each quote, include the page number.
+    3. If the excerpts do not fully support an answer, say: "Not specified in the lease."
+    4. If the context shows a label like "Tenant:" but no name, state that it is blank.
+    5. 'Buyer/Tenant' refers to the Tenant.
     
-    Context:
+    Excerpts:
     {context}
     
     Question: {question}
     Answer:
+    Citations:
     """
     
     for attempt in range(retries):
@@ -133,7 +155,16 @@ async def run_full_extraction(doc_vectors, chunks):
             # 1. Search
             q_vec = get_query_embedding(question)
             retrieved_chunks = find_best_chunks(q_vec, doc_vectors, chunks, k=4)
-            context = "\n\n".join(retrieved_chunks)
+            #context = "\n\n".join(retrieved_chunks)
+            def format_evidence(evidence_list):
+                blocks = []
+                for i, e in enumerate(evidence_list, 1):
+                    blocks.append(
+                        f"[{i}] Page {e['page']} ({e['section']}):\n\"{e['text']}\""
+                    )
+                return "\n\n".join(blocks)
+            
+            context = format_evidence(retrieved_chunks)
             
             # 2. Answer (Using Robust Function)
             answer = generate_answer_robust(context, question)
@@ -160,8 +191,17 @@ def analyze_risks(doc_vectors, chunks):
     
     # Retrieve top 10 chunks to get a broad view
     retrieved_chunks = find_best_chunks(q_vec, doc_vectors, chunks, k=10)
-    context = "\n\n".join(retrieved_chunks)
-    
+    #context = "\n\n".join(retrieved_chunks)
+    context_blocks = []
+    for chunk in retrieved_chunks:
+        text_content = chunk['text']
+        page_num = chunk['page']
+
+        formatted_string = f"Page {page_num or '?'}] {text_content}"
+
+        context_blocks.append(formatted_string)
+    context = "\n\n".join(context_blocks)
+
     prompt = f"""
     Analyze the following lease excerpts for RED FLAGS.
     Focus on:
@@ -185,12 +225,10 @@ def analyze_risks(doc_vectors, chunks):
         print(f"Error analyzing risks: {e}")
 
 
-# ==========================================
 # MAIN APP
-# ==========================================
 async def main():
     print("========================================")
-    print("  Local RAG (Robust Version)")
+    print("  Leasing RAG model")
     print("========================================")
     
     # 1. Input
@@ -202,22 +240,23 @@ async def main():
 
     # 2. Ingest
     try:
-        chunks = load_and_chunk_locally(pdf_path)
+        records = load_and_chunk_locally(pdf_path)
+        texts = [r["text"] for r in records]
     except Exception as e:
         print(f"[!] Parsing Error: {e}")
         return
 
     # 3. Embed
     print("[+] Embedding chunks...")
-    doc_vectors = get_embeddings(chunks)
+    doc_vectors = get_embeddings(texts)
 
     # 4. Menu Loop
     while True:
         print("\n--------------------------------")
         print("[1] Chat with Document")
         print("[2] Generate Full Summary (JSON)")
-        print("[3] Risk Analysis (Red Flags)")  # <--- NEW OPTION
-        print("[4] Exit")                       # <--- MOVED EXIT TO 4
+        print("[3] Risk Analysis (Red Flags)")
+        print("[4] Exit")                       
         choice = input("Choice: ").strip()
 
         if choice == "1":
@@ -228,16 +267,25 @@ async def main():
                 if not q: continue
 
                 q_vec = get_query_embedding(q)
-                retrieved = find_best_chunks(q_vec, doc_vectors, chunks, k=5)
-                ans = generate_answer_robust("\n".join(retrieved), q)
+                # This returns a list of DICTIONARIES now
+                retrieved = find_best_chunks(q_vec, doc_vectors, records, k=5)
+                
+                # We loop through the dictionaries and format them into a string just like we did for the risk analysis.
+                formatted_context = "\n\n".join([
+                    f"[Page {r['page'] or '?'}] {r['text']}" 
+                    for r in retrieved
+                ])
+                
+                # Now we send the formatted STRING to the AI
+                ans = generate_answer_robust(formatted_context, q)
                 print(f"Bot: {ans}")
 
         elif choice == "2":
-            await run_full_extraction(doc_vectors, chunks)
+            await run_full_extraction(doc_vectors, records)
 
         elif choice == "3":
             # <--- NEW LOGIC HERE
-            analyze_risks(doc_vectors, chunks)
+            analyze_risks(doc_vectors, records)
 
         elif choice == "4":
             print("Goodbye!")
