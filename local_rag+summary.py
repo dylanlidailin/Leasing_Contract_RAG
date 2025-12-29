@@ -175,7 +175,7 @@ def analyze_risks(doc_vectors, chunks):
     Report:
     """
     
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
     try:
         response = model.generate_content(prompt)
         print("\n=== 🚩 RISK ANALYSIS REPORT ===")
