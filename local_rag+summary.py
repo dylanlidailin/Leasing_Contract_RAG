@@ -284,7 +284,6 @@ async def main():
             await run_full_extraction(doc_vectors, records)
 
         elif choice == "3":
-            # <--- NEW LOGIC HERE
             analyze_risks(doc_vectors, records)
 
         elif choice == "4":
